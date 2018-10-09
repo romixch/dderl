@@ -132,9 +132,19 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
               ?Info("user ~p, TNS ~p", [User, NewTnsstr]),
               NewTnsstr
       end,
-    OciPort = erloci:new([{logging, true}, {env, [{"NLS_LANG", NLS_LANG}]}], fun oci_adapter:logfun/1),
-    case OciPort:get_session(TNS, User, Password, dderl_dal:user_name(UserId)) of
-        {_, ErlOciSessionPid, _} = Connection when is_pid(ErlOciSessionPid) ->
+    E =  erloci:ociEnvNlsCreate(0,0),
+    {ok, CharsetId} = erloci:ociNlsCharSetNameToId(E, Charset),
+    ok = erloci:ociEnvHandleFree(E),
+    OciEnv =  erloci:ociEnvNlsCreate(CharsetId, CharsetId),
+    ok = erloci_intf:ociAttrSet(OciEnv, 'OCI_HTYPE_ENV', text, Language,
+                           'OCI_ATTR_ENV_NLS_LANGUAGE'),
+    ok = erloci_intf:ociAttrSet(OciEnv, 'OCI_HTYPE_ENV', text, Territory,
+                           'OCI_ATTR_ENV_NLS_TERRITORY'),
+    {ok, Spoolhp} =  erloci:ociSessionPoolCreate(OciEnv, TNS, 2, 10, 1, null,
+                                                 null),
+    {ok, Authhp} =  erloci:ociAuthHandleCreate(OciEnv, User, Password),
+    case erloci:ociSessionGet(OciEnv, Authhp, Spoolhp) of
+        {ok, Connection} ->
             ?Debug("ErlOciSession ~p", [Connection]),
             Con = #ddConn {id = Id, name = Name, owner = UserId, adapter = oci,
                            access  = jsx:decode(jsx:encode(BodyJson),
@@ -157,12 +167,12 @@ process_cmd({[<<"connect">>], BodyJson5, _SessionId}, Sess, UserId, From,
             Priv#priv{connections = [Connection|Connections]};
         {error, {_Code, Msg}} = Error when is_list(Msg) ->
             ?Error("DB connect error ~p", [Error]),
-            OciPort:close(),
+            %OciPort:close(),
             From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(Msg)}})},
             Priv;
         Error ->
             ?Error("DB connect error ~p", [Error]),
-            OciPort:close(),
+            %OciPort:close(),
             From ! {reply, jsx:encode(#{connect=>#{error=>list_to_binary(io_lib:format("~p",[Error]))}})},
             Priv
     end;
